@@ -1,0 +1,2 @@
+how to run this program:
+you can use any C compiler to compile the c files in this project, and then run it, you will see 3 different test case which included in the c files. Or you can cp&paste the code to the online C compiler, also works.
