@@ -284,39 +284,39 @@ void softmax(float* x, int size) {
     }
 }
 __global__ void matmul_kernel(float* xout, const float* x, const float* w, int n, int d) {
-    // 每个线程计算 xout[i] = dot(w[i], x)
+    //this is the kernal of my matmul for project 3
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= d) return;
 
     float val = 0.0f;
     for (int j = 0; j < n; j++) {
-        val += w[i * n + j] * x[j];  // W 是 (d, n)，按 row-major 存储
+        val += w[i * n + j] * x[j];  
     }
     xout[i] = val;
 }
 
 void matmul(float* xout, float* x, float* w, int n, int d) {
-    // 分配 GPU 上的内存
+    //this is the place where I malloc memeory on gpu
     float *d_x = nullptr, *d_w = nullptr, *d_out = nullptr;
     CUCHK(cudaMalloc(&d_x, n * sizeof(float)));
     CUCHK(cudaMalloc(&d_w, n * d * sizeof(float)));
     CUCHK(cudaMalloc(&d_out, d * sizeof(float)));
 
-    // 拷贝输入数据到 GPU
+    
     CUCHK(cudaMemcpy(d_x, x, n * sizeof(float), cudaMemcpyHostToDevice));
     CUCHK(cudaMemcpy(d_w, w, n * d * sizeof(float), cudaMemcpyHostToDevice));
 
-    // 启动 kernel
+    
     int block = 256;
     int grid = (d + block - 1) / block;
     matmul_kernel<<<grid, block>>>(d_out, d_x, d_w, n, d);
     CUCHK(cudaGetLastError());
     CUCHK(cudaDeviceSynchronize());
 
-    // 将结果拷回 host
+    
     CUCHK(cudaMemcpy(xout, d_out, d * sizeof(float), cudaMemcpyDeviceToHost));
 
-    // 清理
+    
     CUCHK(cudaFree(d_x));
     CUCHK(cudaFree(d_w));
     CUCHK(cudaFree(d_out));

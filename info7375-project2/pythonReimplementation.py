@@ -439,7 +439,44 @@ def run(args):
     end = time_in_ms()
     print(f"\nachieved tok/s: {(steps - 1) / (end - start) * 1000}")
 
+def print_array(name, arr):
+    arr = np.array(arr)
+    print(f"{name} = [{', '.join(f'{x: .6f}' for x in arr)}]")
 
+def test_rmsnorm():
+    x = np.array([1,2,3,4], dtype=np.float32)
+    weight = np.array([1,1,1,1], dtype=np.float32)
+    out = rmsnorm(x, x, weight)
+    rms = np.sqrt((1+4+9+16)/4.0 + 1e-5)
+    expect = x / rms
+    print("test_rmsnorm")
+    print_array("  output ", out)
+    print_array("  expect ", expect)
+
+def test_softmax():
+    orig = np.array([1,2,3,4], dtype=np.float32)
+    x = orig.copy()
+    softmax(x, 4)
+    m = 4.0
+    expv = np.exp(orig - m)
+    sum_expv = np.sum(expv)
+    expect = expv / sum_expv
+    print("test_softmax")
+    print_array("  output ", x)
+    print_array("  expect ", expect)
+
+def test_matmul():
+    test_rmsnorm()
+    test_softmax()
+    test_matmul()
+    W = np.array([1,2,3,4,5,6], dtype=np.float32) # shape (2,3) row-major
+    x = np.array([1,1,1], dtype=np.float32)
+    out = [0.0, 0.0]
+    matmul(out, x, W, 3, 2)
+    expect = np.array([6.0, 15.0], dtype=np.float32)
+    print("test_matmul")
+    print_array("  output ", out)
+    print_array("  expect ", expect)
 if __name__ == "__main__":
     args = {
         "checkpoint": './stories15M.bin',
