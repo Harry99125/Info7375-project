@@ -375,7 +375,7 @@ def run(args):
 
 
     with open("tokenizer.bin", "rb") as file:
-        vocab, vocab_scores = tokenizer_init(config, file)
+       vocab, vocab_scores, max_token_length = tokenizer_init(config, file)
 
 
     state = RunState()
