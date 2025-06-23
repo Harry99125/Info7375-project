@@ -466,9 +466,7 @@ def test_softmax():
     print_array("  expect ", expect)
 
 def test_matmul():
-    test_rmsnorm()
-    test_softmax()
-    test_matmul()
+    
     W = np.array([1,2,3,4,5,6], dtype=np.float32) # shape (2,3) row-major
     x = np.array([1,1,1], dtype=np.float32)
     out = [0.0, 0.0]
@@ -478,6 +476,9 @@ def test_matmul():
     print_array("  output ", out)
     print_array("  expect ", expect)
 if __name__ == "__main__":
+    test_rmsnorm()
+    test_softmax()
+    test_matmul()
     args = {
         "checkpoint": './stories15M.bin',
         "temperature": "0.0",
