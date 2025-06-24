@@ -44,6 +44,7 @@ def compile_and_run_cuda(code_path: str):
         return
 
     # Run
+    #Settings here
     run_result = subprocess.run(["./llama2",
         f"/root/code/stories15M.bin",       
         "-z", f"/root/code/tokenizer.bin",  
