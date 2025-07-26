@@ -486,79 +486,176 @@ void RoPe_rotation(int pos, RunState* s, int dim, int kv_dim, int head_size) { /
     }
 }
 #endif
+/*
 
+#define TILE_K 8                             
+
+
+template<int HEAD_SIZE>
+__global__ void multi_head_kernel(int  pos, float*  q_all,int sq, float* out_all,  float*  k_cache,float* v_cache,
+        int kv_dim, int kv_mul,int head_size, int loff)
+{
+
+    int h  = blockIdx.x;                
+    int ld = threadIdx.x;                 
+    int kt = threadIdx.y;                
+
+ 
+    extern __shared__ float sm[];
+    float* s_k = sm;                                         
+    float* s_v = s_k + TILE_K * head_size;
+     __shared__ float s_q[HEAD_SIZE];
+     float* q = q_all + h * head_size;
+    if (ld <  head_size) s_q[ld] = q[ld];
+    __syncthreads();
+
+ 
+    float m_prev = -FLT_MAX, l_prev = 0.f, acc = 0.f;
+
+ 
+    for (int t0 = 0; t0 <= pos; t0 += TILE_K) {
+        int t = t0 + kt;                                
+
+    
+        if (t <= pos && ld < head_size) {
+            const float* k_glb = k_cache + loff + t*kv_dim + (h/kv_mul)* head_size;
+            const float* v_glb = v_cache + loff + t*kv_dim + (h/kv_mul)* head_size;
+            s_k[kt* head_size + ld] = k_glb[ld];
+            s_v[kt* head_size + ld] = v_glb[ld];
+        }
+        __syncthreads();
+
+        if (t <= pos && ld <  head_size) {
+            float score = 0.f;
+          
+            for (int i = 0; i < head_size; ++i)
+                score += s_q[i] * s_k[kt * head_size + i];
+            score *= rsqrtf( head_size);            
+            float m_new = fmaxf(m_prev, score);
+            float l_new = __expf(m_prev - m_new) * l_prev +
+                          __expf(score   - m_new);
+            float coef_p = __expf(m_prev - m_new) / l_new;
+            float coef_n = __expf(score   - m_new) / l_new;
+
+            float v_val = s_v[kt* head_size + ld];
+            acc = acc * coef_p + v_val * coef_n;
+
+            m_prev = m_new;
+            l_prev = l_new;
+        }
+        __syncthreads();
+    }
+
+
+    if (ld <  head_size) out_all[h *  head_size + ld] = acc;
+}
+
+
+inline void multi_head_attention(
+        int pos, Config* p, RunState* s,
+        int kv_dim, int kv_mul, int head_size, int loff)
+{
+    constexpr int HS =128;                   
+   
+
+    dim3 block(HS, TILE_K);                      
+    dim3 grid(p->n_heads);
+    size_t shmem = 2 * TILE_K * HS * sizeof(float); 
+
+   multi_head_kernel<HS><<<grid, block, shmem>>>(pos,s->q, p->seq_len, s->xb,  s->key_cache, s->value_cache,kv_dim, kv_mul,head_size, loff);
+
+}
+*/
 
 // TODO refactor vs C code
 __global__ void multi_head_attention_kernel(int pos, int seq_len, float *sq, float *satt, float *sxb, float *key_cache, float *value_cache, int kv_dim, int kv_mul, int head_size, int loff) {
     int h = blockIdx.x;
-  extern __shared__ float q[];      
+extern __shared__ float sm[]; 
+float* q = sm;                         
+float* s_k = sm + head_size;              
 
-      extern __shared__ float s_k[];            
+         
 int ld = threadIdx.x;              
-
+int kt = threadIdx.y;      
 
 const float* g_q = sq + h * head_size;
 const float* ta = satt + h * seq_len;
-
+ float* xb = sxb + h * head_size;
 if (ld < head_size){            
     q[ld] = g_q[ld];
 }
 
 __syncthreads();  
+ float* att = satt + h * seq_len;
+for (int t0 = 0; t0 <= pos; t0 += blockDim.y) {
+    int t = t0 + kt; 
+
    
-    // attention scores for this head
-    float* att = satt + h * seq_len;
-    // iterate over all timesteps, including the current one 
-    // In CUDA, each thread does a small portion of the calc
-    for (int t = threadIdx.x; t <= pos; t += blockDim.x) {
+    if (t <= pos && ld < head_size) {
+        int base = loff + t * kv_dim + h * head_size;
+        s_k[kt*head_size + ld] = key_cache[base + ld];
+   
+    }
+   __syncthreads();  
+
+  if (t <= pos && ld == 0) {
+  float score = 0.f;
+  for (int i = 0; i < head_size; ++i) {
+    score += q[i] * s_k[kt*head_size + i];
+  }
+  score *= rsqrtf((float)head_size);
+  att[t] = score;
+}
+    
+}
+/*
+   for (int t = threadIdx.x; t <= pos; t += blockDim.x) {
         // get the key vector for this head and at this timestep
-        float* k = key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+        
+       
+     
+   
         // calculate the attention score as the dot product of q and k
         float score = 0.0f;
         for (int i = 0; i < head_size; i++) {
-            score += q[i] * k[i];
+            
+            score +=q[i] * s_k[i];
         }
         score /= sqrtf(head_size);
         // save the score to the attention buffer
         att[t] = score;
     }
-    // above was this threads portion of the iteration.  wait for all threads to finish
-    __syncthreads();
 
-    // softmax the scores to get attention weights, from 0..pos inclusively
+*/
     softmax_gpu(att, pos + 1);
     __syncthreads();
 
-    // weighted sum of the values, store back into xb
-    // NOTE: by swapping the order of the for loops (vs. C) a simpler
-    // version of the code accomplishes the same task and fits more
-    // naturally with the CUDA way of subdividing the problem.
-    float* xb = sxb + h * head_size;
+
+   
     for (int i = threadIdx.x; i < head_size; i += blockDim.x) {
         float val = 0.0f;
         for (int t = 0; t <= pos; t++) {
             // get the value vector for this head and at this timestep
-            float* v = value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+           float* v = value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
             // get the attention weight for this timestep
             float a = att[t];
-            val += a * v[i];
+            val += a *v[i];
         }
         xb[i] = val;
     }
 }
 void multi_head_attention(int pos, Config* p, RunState* s, int kv_dim, int kv_mul, int head_size, int loff) {
+    
     multi_head_attention_kernel <<<p->n_heads, num_threads_lrg>>> (pos, p->seq_len, s->q, s->att, s->xb, s->key_cache, s->value_cache, kv_dim, kv_mul, head_size, loff);
 }
 
-
-#ifdef USE_CUDA
 __global__ void f_silu_elementwise_mul_w3_kernel(float *shb, float *shb2, int hidden_dim) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < hidden_dim) {
         float val = shb[i];
-        // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
+    
         val *= (1.0f / (1.0f + expf(-val)));
-        // elementwise multiply with w3(x)
+    
         val *= shb2[i];
         shb[i] = val;
     }
@@ -566,18 +663,8 @@ __global__ void f_silu_elementwise_mul_w3_kernel(float *shb, float *shb2, int hi
 void f_silu_elementwise_mul_w3(RunState *s, int hidden_dim) {
     f_silu_elementwise_mul_w3_kernel<<<divUp(hidden_dim, num_threads_med), num_threads_med>>>(s->hb, s->hb2, hidden_dim);
 }
-#else
-void f_silu_elementwise_mul_w3(RunState *s, int hidden_dim) {
-    for (int i = 0; i < hidden_dim; i++) {
-        float val = s->hb[i];
-        // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-        val *= (1.0f / (1.0f + expf(-val)));
-        // elementwise multiply with w3(x)
-        val *= s->hb2[i];
-        s->hb[i] = val;
-    }
-}
-#endif
+
+
 
 #ifdef USE_CUDA
 __global__ void accum_kernel(float* a, float* b, int size) {

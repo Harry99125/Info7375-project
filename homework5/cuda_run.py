@@ -14,7 +14,7 @@ image = (
        
 )
 
-@app.function(image=image, gpu="A10G", timeout=300)
+@app.function(image=image, gpu="A100", timeout=300)
 def compile_and_run_cuda(code_path: str):
     import subprocess
 
