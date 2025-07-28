@@ -20,10 +20,10 @@
     #include <sys/mman.h>
 #endif
 
-#ifdef USE_CUDA
+
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
-#include <cublas_v2.h>
+
  #define CUCHK(err) cuda_check((err), __FILE__, __LINE__)
 inline void cuda_check(cudaError_t error_code, const char *file, int line)
 {
@@ -35,23 +35,7 @@ inline void cuda_check(cudaError_t error_code, const char *file, int line)
     }
 }
 
-cublasHandle_t g_cublas_handle = nullptr;
 
-void create_cublas_handle() {
-    cublasStatus_t stat = cublasCreate(&g_cublas_handle);  // FIXME cublasDestroy
-    if (stat != CUBLAS_STATUS_SUCCESS) {
-        printf ("CUBLAS initialization failed\n");
-        exit(EXIT_FAILURE);
-    }
-}
-void destroy_cublas_handle() {
-    cublasStatus_t stat = cublasDestroy(g_cublas_handle);
-    if (stat != CUBLAS_STATUS_SUCCESS) {
-        printf ("CUBLAS initialization failed\n");
-        exit(EXIT_FAILURE);
-    }
-}
-#endif
   
 typedef struct {
     int dim; // transformer dimension
@@ -103,7 +87,7 @@ typedef struct {
     ssize_t file_size; // size of the checkpoint file in bytes
 } Transformer;
 
-#ifdef USE_CUDA
+
 void malloc_run_state(RunState* s, Config* p) {
      int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
     CUCHK(cudaMalloc((void**)&s->x, p->dim * sizeof(float)));
@@ -123,28 +107,8 @@ void malloc_run_state(RunState* s, Config* p) {
         exit(EXIT_FAILURE);
     }
 }
-#else
-void malloc_run_state(RunState* s, Config* p) {
-     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
-    s->x = (float *)calloc(p->dim, sizeof(float));
-    s->xb = (float *)calloc(p->dim, sizeof(float));
-    s->xb2 = (float *)calloc(p->dim, sizeof(float));
-    s->hb = (float *)calloc(p->hidden_dim, sizeof(float));
-    s->hb2 = (float *)calloc(p->hidden_dim, sizeof(float));
-    s->q = (float *)calloc(p->dim, sizeof(float));
-    s->key_cache = (float *)calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
-    s->value_cache = (float *)calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
-    s->att = (float *)calloc(p->n_heads * p->seq_len, sizeof(float));
-    s->logits = (float *)calloc(p->vocab_size, sizeof(float));
-     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
-     || !s->key_cache || !s->value_cache || !s->att || !s->logits) {
-        fprintf(stderr, "malloc failed!\n");
-        exit(EXIT_FAILURE);
-    }
-}
-#endif
 
-#ifdef USE_CUDA
+
 void free_run_state(RunState* s) {
     CUCHK(cudaFree(s->x));
     CUCHK(cudaFree(s->xb));
@@ -158,20 +122,7 @@ void free_run_state(RunState* s) {
     CUCHK(cudaFree(s->key_cache));
     CUCHK(cudaFree(s->value_cache));
 }
-#else
-void free_run_state(RunState* s) {
-    free(s->x);
-    free(s->xb);
-    free(s->xb2);
-    free(s->hb);
-    free(s->hb2);
-    free(s->q);
-    free(s->att);
-    free(s->logits);
-    free(s->key_cache);
-    free(s->value_cache);
-}
-#endif
+
 
 void memory_map_weights(TransformerWeights *w, Config* p, float* ptr, int shared_weights) {
     int head_size = p->dim / p->n_heads;
@@ -296,40 +247,40 @@ void rmsnorm(float* o, float* x, float* weight, int size) {
 #endif
 
 #ifdef USE_CUDA
-__global__ void softmax_kernel(float* x, int size,float max_val,float sum) {
-     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= size) return;
-
-    x[i]=expf(x[i]-max_val);
-    sum+=x[i];
-}
-__global__ void norm_kernel(float* x, int size,float max_val,float sum) {
-     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= size) return;
-
-    x[i]/=sum;
-}
 __device__ void softmax_gpu(float* x, int size) {
-   
-    if (threadIdx.x == 0) {
-    
-        float max_val = -FLT_MAX;
-        for (int i = 0; i < size; ++i) {
-            max_val = fmaxf(max_val, x[i]);
-        }
-    
-        float sum = 0.0f;
-        for (int i = 0; i < size; ++i) {
-            float v = expf(x[i] - max_val);
-            x[i] = v;
-            sum += v;
-        }
-    
-        for (int i = 0; i < size; ++i) {
-            x[i] /= sum;
-        }
+    extern __shared__ float sm[];    
+    float* s_max = sm;              
+    float* s_sum = sm + 1;            
+
+
+    float thread_max = -FLT_MAX;
+    for (int i = threadIdx.x; i < size; i += blockDim.x) {
+        thread_max = fmaxf(thread_max, x[i]);
+    }
+ 
+    if (threadIdx.x == 0) s_max[0] = thread_max;
+    __syncthreads();
+    float max_val = s_max[0];
+
+
+    float thread_sum = 0.f;
+    for (int i = threadIdx.x; i < size; i += blockDim.x) {
+        float v = expf(x[i] - max_val);
+        x[i] = v;
+        thread_sum += v;
     }
 
+    if (threadIdx.x == 0) s_sum[0] = 0.0f;
+    __syncthreads();
+    atomicAdd(&s_sum[0], thread_sum);
+    __syncthreads();
+    float sum = s_sum[0];
+
+   
+    float inv = 1.0f / sum;
+    for (int i = threadIdx.x; i < size; i += blockDim.x) {
+        x[i] *= inv;
+    }
     __syncthreads();
 }
 #endif
@@ -397,16 +348,16 @@ void RoPe_rotation(int pos, RunState* s, int dim, int kv_dim, int head_size) {
     RoPe_rotation_kernel <<<1, dim/2 >>> (pos, s->q, s->k, kv_dim, head_size);
 }
 #else
-void RoPe_rotation(int pos, RunState* s, int dim, int kv_dim, int head_size) { //s->q, s->k, freq_cis_real_row, freq_cis_imag_row, p->n_heads, head_size) {
+void RoPe_rotation(int pos, RunState* s, int dim, int kv_dim, int head_size) {
     for (int i = 0; i < dim; i+=2) {
         int head_dim = i % head_size;
         float freq = 1.0f / powf(10000.0f, head_dim / (float)head_size);
         float val = pos * freq;
         float fcr = cosf(val);
         float fci = sinf(val);
-        int rotn = i < kv_dim ? 2 : 1; // how many vectors? 2 = q & k, 1 = q only
+        int rotn = i < kv_dim ? 2 : 1; /
         for (int v = 0; v < rotn; v++) {
-            float* vec = v == 0 ? s->q : s->k; // the vector to rotate (query or key)
+            float* vec = v == 0 ? s->q : s->k;
             float v0 = vec[i];
             float v1 = vec[i+1];
             vec[i]   = v0 * fcr - v1 * fci;
@@ -501,7 +452,7 @@ extern __shared__ float sm[];
 float* q = sm;                         
 float* s_k = sm + head_size;
 float* s_att  = s_k + blockDim.y * head_size;       
-float* s_v  = s_k + blockDim.y * head_size;        
+      
 
          
 int ld = threadIdx.x;              
@@ -1087,9 +1038,7 @@ int main(int argc, char *argv[]) {
      Sampler sampler;
     build_sampler(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
 
-#ifdef USE_CUDA
-    create_cublas_handle();
-#endif
+
      if (strcmp(mode, "generate") == 0) {
         generate(&transformer, &tokenizer, &sampler, prompt, steps);
     } else if (strcmp(mode, "chat") == 0) {
@@ -1101,9 +1050,7 @@ int main(int argc, char *argv[]) {
      free_sampler(&sampler);
     free_tokenizer(&tokenizer);
     free_transformer(&transformer);
-#ifdef USE_CUDA
-    destroy_cublas_handle();
-#endif
+
     return 0;
 }
 #endif
