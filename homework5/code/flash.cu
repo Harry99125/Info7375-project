@@ -499,21 +499,23 @@ inline void multi_head_attention(
     int h = blockIdx.x;
 extern __shared__ float sm[]; 
 float* q = sm;                         
-float* s_k = sm + head_size;              
+float* s_k = sm + head_size;
+float* s_att  = s_k + blockDim.y * head_size;       
+float* s_v  = s_k + blockDim.y * head_size;        
 
          
 int ld = threadIdx.x;              
 int kt = threadIdx.y;      
 
 const float* g_q = sq + h * head_size;
-const float* ta = satt + h * seq_len;
+
  float* xb = sxb + h * head_size;
 if (ld < head_size){            
     q[ld] = g_q[ld];
 }
 int Tile=blockDim.y;
 __syncthreads();  
- float* att = satt + h * seq_len;
+
 for (int t0 = 0; t0 <= pos; t0 += blockDim.y) {
     int t = t0 + kt; 
 
@@ -530,8 +532,9 @@ for (int t0 = 0; t0 <= pos; t0 += blockDim.y) {
   for (int i = 0; i < head_size; ++i) {
     score += q[i] * s_k[i];
   }
-  score *= rsqrtf((float)head_size);
-  att[t] = score;
+  s_att[t] = score;
+  s_att[t]*= rsqrtf((float)head_size);
+ 
 }
     
 }
@@ -547,7 +550,7 @@ for (int t0 = 0; t0 <= pos; t0 += blockDim.y) {
     }
 
 */
-    softmax_gpu(att, pos + 1);
+    softmax_gpu(s_att, pos + 1);
     __syncthreads();
 
 
@@ -556,15 +559,19 @@ for (int t0 = 0; t0 <= pos; t0 += blockDim.y) {
         float val = 0.0f;
         for (int t = 0; t <= pos; t++) {
             float* v = value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-             float a = att[t];
+             float a = s_att[t];
             val += a *v[i];
         }
         xb[i] = val;
     }
 }
 void multi_head_attention(int pos, Config* p, RunState* s, int kv_dim, int kv_mul, int head_size, int loff) {
-    
-    multi_head_attention_kernel <<<p->n_heads, num_threads_lrg>>> (pos, p->seq_len, s->q, s->att, s->xb, s->key_cache, s->value_cache, kv_dim, kv_mul, head_size, loff);
+    size_t elems = head_size              // q
+             + 32 * head_size       // s_k
+             + (pos + 1);             // s_att
+
+size_t shm_bytes = elems * sizeof(float);
+    multi_head_attention_kernel <<<p->n_heads, num_threads_lrg, shm_bytes  >>> (pos, p->seq_len, s->q, s->att, s->xb, s->key_cache, s->value_cache, kv_dim, kv_mul, head_size, loff);
 }
 
 __global__ void f_silu_elementwise_mul_w3_kernel(float *shb, float *shb2, int hidden_dim) {
