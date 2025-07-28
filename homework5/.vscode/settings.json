@@ -66,6 +66,7 @@
     "span": "cpp",
     "regex": "cpp",
     "valarray": "cpp",
-    "random": "cpp"
+    "random": "cpp",
+    "cstdlib": "cpp"
   }
 }

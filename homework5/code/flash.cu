@@ -24,9 +24,7 @@
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
 #include <cublas_v2.h>
-
-// Each CUDA function call should be checked for errors.
-#define CUCHK(err) cuda_check((err), __FILE__, __LINE__)
+ #define CUCHK(err) cuda_check((err), __FILE__, __LINE__)
 inline void cuda_check(cudaError_t error_code, const char *file, int line)
 {
     if (error_code != cudaSuccess)
@@ -54,10 +52,7 @@ void destroy_cublas_handle() {
     }
 }
 #endif
-
-// ----------------------------------------------------------------------------
-// Transformer model
-
+  
 typedef struct {
     int dim; // transformer dimension
     int hidden_dim; // for ffn layers
@@ -67,42 +62,22 @@ typedef struct {
     int vocab_size; // vocabulary size, usually 256 (byte-level)
     int seq_len; // max sequence length
 } Config;
-
-// CUDA NOTE: The TransformerWeights structure will be stored on the host, 
-// but all of the pointers in the structure will point to data on the GPU.
-// The checkpoint file is mmap-ed to the host and the weights portion 
-// is allocated on and copied to the GPU.  Then, memory_map_weights() updates  
-// these structure pointers to point to the proper location.  Happily, this
-// function is the same for both C and CUDA.
-typedef struct {
-    // token embedding table
-    float* token_embedding_table;    // (vocab_size, dim)
-    // weights for rmsnorms
-    float* rms_att_weight; // (layer, dim) rmsnorm weights
+      typedef struct {
+     float* token_embedding_table;    // (vocab_size, dim)
+     float* rms_att_weight; // (layer, dim) rmsnorm weights
     float* rms_ffn_weight; // (layer, dim)
-    // weights for matmuls. note dim == n_heads * head_size
-    float* wq; // (layer, dim, n_heads * head_size)
+     float* wq; // (layer, dim, n_heads * head_size)
     float* wk; // (layer, dim, n_kv_heads * head_size)
     float* wv; // (layer, dim, n_kv_heads * head_size)
     float* wo; // (layer, n_heads * head_size, dim)
-    // weights for ffn
-    float* w1; // (layer, hidden_dim, dim)
+     float* w1; // (layer, hidden_dim, dim)
     float* w2; // (layer, dim, hidden_dim)
     float* w3; // (layer, hidden_dim, dim)
-    // final rmsnorm
-    float* rms_final_weight; // (dim,)
-    // (optional) classifier weights for the logits, on the last layer
-    float* wcls;
+     float* rms_final_weight; // (dim,)
+     float* wcls;
 } TransformerWeights;
-
-// CUDA NOTE: The RunState structure will be stored on the host, but all of the
-// pointers in the structure will point to data on the GPU, created via
-// cudaMalloc.  The exception is logits which is the final result of the
-// transformer & is copied from the GPU as the last step in the transformer
-// and is used by the host.
-typedef struct {
-    // current wave of activations
-    float *x; // activation at current time stamp (dim,)
+     typedef struct {
+     float *x; // activation at current time stamp (dim,)
     float *xb; // same, but inside a residual branch (dim,)
     float *xb2; // an additional buffer just for convenience (dim,)
     float *hb; // buffer for hidden dimension in the ffn (hidden_dim,)
@@ -115,8 +90,7 @@ typedef struct {
     float *logits_gpu; // output logits in GPU
 #endif
     float *logits; // output logits in CPU
-    // kv cache
-    float* key_cache;   // (layer, seq_len, dim)
+     float* key_cache;   // (layer, seq_len, dim)
     float* value_cache; // (layer, seq_len, dim)
 } RunState;
 
@@ -124,16 +98,14 @@ typedef struct {
     Config config; // the hyperparameters of the architecture (the blueprint)
     TransformerWeights weights; // the weights of the model
     RunState state; // buffers for the "wave" of activations in the forward pass
-    // some more state needed to properly clean up the memory mapping (sigh)
-    int fd; // file descriptor for memory mapping
+     int fd; // file descriptor for memory mapping
     float* data; // memory mapped data pointer
     ssize_t file_size; // size of the checkpoint file in bytes
 } Transformer;
 
 #ifdef USE_CUDA
 void malloc_run_state(RunState* s, Config* p) {
-    // we calloc instead of malloc to keep valgrind happy
-    int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
+     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
     CUCHK(cudaMalloc((void**)&s->x, p->dim * sizeof(float)));
     CUCHK(cudaMalloc((void**)&s->xb, p->dim * sizeof(float)));
     CUCHK(cudaMalloc((void**)&s->xb2, p->dim * sizeof(float)));
@@ -145,8 +117,7 @@ void malloc_run_state(RunState* s, Config* p) {
     CUCHK(cudaMalloc((void**)&s->att, p->n_heads * p->seq_len * sizeof(float)));
     CUCHK(cudaMalloc((void**)&s->logits_gpu, p->vocab_size * sizeof(float)));
     s->logits = (float *)calloc(p->vocab_size, sizeof(float));
-    // ensure all mallocs went fine
-    if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
+     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
      || !s->key_cache || !s->value_cache || !s->att || !s->logits_gpu || !s->logits) {
         fprintf(stderr, "malloc failed!\n");
         exit(EXIT_FAILURE);
@@ -154,8 +125,7 @@ void malloc_run_state(RunState* s, Config* p) {
 }
 #else
 void malloc_run_state(RunState* s, Config* p) {
-    // we calloc instead of malloc to keep valgrind happy
-    int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
+     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
     s->x = (float *)calloc(p->dim, sizeof(float));
     s->xb = (float *)calloc(p->dim, sizeof(float));
     s->xb2 = (float *)calloc(p->dim, sizeof(float));
@@ -166,8 +136,7 @@ void malloc_run_state(RunState* s, Config* p) {
     s->value_cache = (float *)calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
     s->att = (float *)calloc(p->n_heads * p->seq_len, sizeof(float));
     s->logits = (float *)calloc(p->vocab_size, sizeof(float));
-    // ensure all mallocs went fine
-    if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
+     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
      || !s->key_cache || !s->value_cache || !s->att || !s->logits) {
         fprintf(stderr, "malloc failed!\n");
         exit(EXIT_FAILURE);
@@ -206,8 +175,7 @@ void free_run_state(RunState* s) {
 
 void memory_map_weights(TransformerWeights *w, Config* p, float* ptr, int shared_weights) {
     int head_size = p->dim / p->n_heads;
-    // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
-    unsigned long long n_layers = p->n_layers;
+     unsigned long long n_layers = p->n_layers;
     w->token_embedding_table = ptr;
     ptr += p->vocab_size * p->dim;
     w->rms_att_weight = ptr;
@@ -239,25 +207,18 @@ void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weigh
                      int* fd, float** data, ssize_t* file_size) {
     FILE *file = fopen(checkpoint, "rb");
     if (!file) { fprintf(stderr, "Couldn't open file %s\n", checkpoint); exit(EXIT_FAILURE); }
-    // read in the config header
-    if (fread(config, sizeof(Config), 1, file) != 1) { exit(EXIT_FAILURE); }
-    // negative vocab size is hacky way of signaling unshared weights. bit yikes.
-    int shared_weights = config->vocab_size > 0 ? 1 : 0;
+     if (fread(config, sizeof(Config), 1, file) != 1) { exit(EXIT_FAILURE); }
+     int shared_weights = config->vocab_size > 0 ? 1 : 0;
     config->vocab_size = abs(config->vocab_size);
-    // figure out the file size
-    fseek(file, 0, SEEK_END); // move file pointer to end of file
+     fseek(file, 0, SEEK_END); // move file pointer to end of file
     *file_size = ftell(file); // get the file size, in bytes
     fclose(file);
-    // memory map the Transformer weights into the data pointer
-    *fd = open(checkpoint, O_RDONLY); // open in read only mode
+     *fd = open(checkpoint, O_RDONLY); // open in read only mode
     if (*fd == -1) { fprintf(stderr, "open failed!\n"); exit(EXIT_FAILURE); }
     *data = (float *)mmap(NULL, *file_size, PROT_READ, MAP_PRIVATE, *fd, 0);
     if (*data == MAP_FAILED) { fprintf(stderr, "mmap failed!\n"); exit(EXIT_FAILURE); }
 #ifdef USE_CUDA
-    // allocate & copy mmap data to the gpu first
-    // TODO: allocate & copy just a portion to the GPU if the weights are too big
-    // to fit in the GPU, then copy the data only as needed while running.
-    float* weights_ptr;
+       float* weights_ptr;
     size_t weights_size = *file_size - sizeof(Config);
     CUCHK(cudaMalloc((void**)&weights_ptr, weights_size));
     CUCHK(cudaMemcpy(weights_ptr, *data + sizeof(Config)/sizeof(float), weights_size, cudaMemcpyHostToDevice));
@@ -268,31 +229,21 @@ void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weigh
 }
 
 void build_transformer(Transformer *t, char* checkpoint_path) {
-    // read in the Config and the Weights from the checkpoint
-    read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size);
-    // allocate the RunState buffers
-    malloc_run_state(&t->state, &t->config);
+     read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size);
+     malloc_run_state(&t->state, &t->config);
 }
 
 void free_transformer(Transformer* t) {
-    // close the memory mapping
-    if (t->data != MAP_FAILED) { munmap(t->data, t->file_size); }
+     if (t->data != MAP_FAILED) { munmap(t->data, t->file_size); }
     if (t->fd != -1) { close(t->fd); }
 #ifdef USE_CUDA
-    // we cudaMalloc a region of memory, then hand the address to
-    // the token_embedding_table field.  Free it here.
-    CUCHK(cudaFree(t->weights.token_embedding_table));
+      CUCHK(cudaFree(t->weights.token_embedding_table));
 #endif
-    // free the RunState buffers
-    free_run_state(&t->state);
+     free_run_state(&t->state);
 }
-
-// ----------------------------------------------------------------------------
-// neural net blocks; the dynamics of the Transformer
-
+  
 #ifdef USE_CUDA
-// Utility routine to divide a into ceiling of b parts
-int divUp(int a, int b) {
+ int divUp(int a, int b) {
     return (a - 1) / b + 1;
 }
 
@@ -300,8 +251,7 @@ const int num_threads_lrg = 1024;
 const int num_threads_med = 256;
 
 __global__ void rmsnorm_kernel(float* o, float* x, float* weight, int size, int elementsPerThread) {
-    // parallel reduction of sum of squares via CUB
-    float ss = 0.0f;
+     float ss = 0.0f;
     for (int i = 0; i < elementsPerThread; i++) {
         int j = threadIdx.x + i * num_threads_lrg;
         if (j < size)
@@ -310,9 +260,7 @@ __global__ void rmsnorm_kernel(float* o, float* x, float* weight, int size, int 
     using BlockReduce = cub::BlockReduce<float, num_threads_lrg>;
     __shared__ typename BlockReduce::TempStorage temp;
     ss = BlockReduce(temp).Sum(ss);
-
-    // serialization point to calculate normalization factor 
-    __shared__ float shared_ss;
+     __shared__ float shared_ss;
     if (threadIdx.x == 0) {
         ss /= size;
         ss += 1e-5f;
@@ -321,9 +269,7 @@ __global__ void rmsnorm_kernel(float* o, float* x, float* weight, int size, int 
     }
     __syncthreads();
     ss = shared_ss;
-
-    // normalize and scale
-    for (int i = 0; i < elementsPerThread; i++) {
+     for (int i = 0; i < elementsPerThread; i++) {
         int j = threadIdx.x + i * num_threads_lrg;
         if (j < size) {
             o[j] = weight[j] * (ss * x[j]);
@@ -336,16 +282,14 @@ void rmsnorm(float* o, float* x, float* weight, int size) {
 }
 #else
 void rmsnorm(float* o, float* x, float* weight, int size) {
-    // calculate sum of squares
-    float ss = 0.0f;
+     float ss = 0.0f;
     for (int j = 0; j < size; j++) {
         ss += x[j] * x[j];
     }
     ss /= size;
     ss += 1e-5f;
     ss = 1.0f / sqrtf(ss);
-    // normalize and scale
-    for (int j = 0; j < size; j++) {
+     for (int j = 0; j < size; j++) {
         o[j] = weight[j] * (ss * x[j]);
     }
 }
@@ -353,16 +297,14 @@ void rmsnorm(float* o, float* x, float* weight, int size) {
 
 #ifdef USE_CUDA
 __global__ void softmax_kernel(float* x, int size,float max_val,float sum) {
-    //this is the kernal of my matmul for project 3
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
+     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= size) return;
 
     x[i]=expf(x[i]-max_val);
     sum+=x[i];
 }
 __global__ void norm_kernel(float* x, int size,float max_val,float sum) {
-    //this is the kernal of my matmul for project 3
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
+     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= size) return;
 
     x[i]/=sum;
@@ -392,29 +334,25 @@ __device__ void softmax_gpu(float* x, int size) {
 }
 #endif
 void softmax(float* x, int size) {
-    // find max value (for numerical stability)
-    float max_val = x[0];
+     float max_val = x[0];
     for (int i = 1; i < size; i++) {
         if (x[i] > max_val) {
             max_val = x[i];
         }
     }
-    // exp and sum
-    float sum = 0.0f;
+     float sum = 0.0f;
     for (int i = 0; i < size; i++) {
         x[i] = expf(x[i] - max_val);
         sum += x[i];
     }
-    // normalize
-    for (int i = 0; i < size; i++) {
+     for (int i = 0; i < size; i++) {
         x[i] /= sum;
     }
 }
 
 
 __global__ void matmul_kernel(float* xout, const float* x, const float* w, int n, int d) {
-    //this is the kernal of my matmul for project 3
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
+     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= d) return;
 
     float val = 0.0f;
@@ -423,10 +361,8 @@ __global__ void matmul_kernel(float* xout, const float* x, const float* w, int n
     }
     xout[i] = val;
 }
-// Use cuBLAS for matmul to leverage this included, high-performance library.
-void matmul(float* xout, float* x, float* w, int n, int d) {
-    //this is the place where I malloc memeory on gpu
-
+ void matmul(float* xout, float* x, float* w, int n, int d) {
+ 
 
 
 
@@ -436,18 +372,11 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
     matmul_kernel<<<grid, block>>>(xout, x, w, n, d);
     CUCHK(cudaGetLastError());
     CUCHK(cudaDeviceSynchronize());
-
-    
-    //CUCHK(cudaMemcpy(xout, d_out, d * sizeof(float), cudaMemcpyDeviceToHost));
-
+ 
     
  
 }
-
-
-
-// Additional neural net blocks (brought out from transformer function)
-#ifdef USE_CUDA
+ #ifdef USE_CUDA
 __global__ void RoPe_rotation_kernel(int pos, float *sq, float *sk, int kv_dim, int head_size) {
     int i = threadIdx.x * 2;
     int head_dim = i % head_size;
@@ -566,9 +495,7 @@ inline void multi_head_attention(
 
 }
 */
-
-// TODO refactor vs C code
-__global__ void multi_head_attention_kernel(int pos, int seq_len, float *sq, float *satt, float *sxb, float *key_cache, float *value_cache, int kv_dim, int kv_mul, int head_size, int loff) {
+ __global__ void multi_head_attention_kernel(int pos, int seq_len, float *sq, float *satt, float *sxb, float *key_cache, float *value_cache, int kv_dim, int kv_mul, int head_size, int loff) {
     int h = blockIdx.x;
 extern __shared__ float sm[]; 
 float* q = sm;                         
@@ -584,7 +511,7 @@ const float* ta = satt + h * seq_len;
 if (ld < head_size){            
     q[ld] = g_q[ld];
 }
-
+int Tile=blockDim.y;
 __syncthreads();  
  float* att = satt + h * seq_len;
 for (int t0 = 0; t0 <= pos; t0 += blockDim.y) {
@@ -601,7 +528,7 @@ for (int t0 = 0; t0 <= pos; t0 += blockDim.y) {
   if (t <= pos && ld == 0) {
   float score = 0.f;
   for (int i = 0; i < head_size; ++i) {
-    score += q[i] * s_k[kt*head_size + i];
+    score += q[i] * s_k[i];
   }
   score *= rsqrtf((float)head_size);
   att[t] = score;
@@ -610,20 +537,13 @@ for (int t0 = 0; t0 <= pos; t0 += blockDim.y) {
 }
 /*
    for (int t = threadIdx.x; t <= pos; t += blockDim.x) {
-        // get the key vector for this head and at this timestep
-        
-       
-     
-   
-        // calculate the attention score as the dot product of q and k
-        float score = 0.0f;
+          float score = 0.0f;
         for (int i = 0; i < head_size; i++) {
             
             score +=q[i] * s_k[i];
         }
         score /= sqrtf(head_size);
-        // save the score to the attention buffer
-        att[t] = score;
+         att[t] = score;
     }
 
 */
@@ -635,10 +555,8 @@ for (int t0 = 0; t0 <= pos; t0 += blockDim.y) {
     for (int i = threadIdx.x; i < head_size; i += blockDim.x) {
         float val = 0.0f;
         for (int t = 0; t <= pos; t++) {
-            // get the value vector for this head and at this timestep
-           float* v = value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-            // get the attention weight for this timestep
-            float a = att[t];
+            float* v = value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+             float a = att[t];
             val += a *v[i];
         }
         xb[i] = val;
@@ -685,9 +603,7 @@ void accum(float *a, float *b, int size) {
 #endif
 
 float* forward(Transformer* transformer, int token, int pos) {
-
-    // a few convenience variables
-    Config* p = &transformer->config;
+     Config* p = &transformer->config;
     TransformerWeights* w = &transformer->weights;
     RunState* s = &transformer->state;
     float *x = s->x;
@@ -696,66 +612,33 @@ float* forward(Transformer* transformer, int token, int pos) {
     int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
     int hidden_dim =  p->hidden_dim;
     int head_size = dim / p->n_heads;
-
-    // copy the token embedding into x
-    float* content_row = w->token_embedding_table + token * dim;
+     float* content_row = w->token_embedding_table + token * dim;
 #ifdef USE_CUDA
     CUCHK(cudaMemcpy(x, content_row, dim*sizeof(*x), cudaMemcpyHostToDevice));
 #else
     memcpy(x, content_row, dim*sizeof(*x));
 #endif
-
-    // forward all the layers
-    for(unsigned long long l = 0; l < p->n_layers; l++) {
-
-        // attention rmsnorm
-        rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
-
-        // key and value point to the kv cache
-        int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
+     for(unsigned long long l = 0; l < p->n_layers; l++) {
+         rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
+         int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
         s->k = s->key_cache + loff + pos * kv_dim;
         s->v = s->value_cache + loff + pos * kv_dim;
-
-        // qkv matmuls for this position
-        matmul(s->q, s->xb, w->wq + l*dim*dim, dim, dim);
+         matmul(s->q, s->xb, w->wq + l*dim*dim, dim, dim);
         matmul(s->k, s->xb, w->wk + l*dim*kv_dim, dim, kv_dim);
         matmul(s->v, s->xb, w->wv + l*dim*kv_dim, dim, kv_dim);
-
-        // RoPE relative positional encoding: complex-valued rotate q and k in each head
-        RoPe_rotation(pos, s, dim, kv_dim, head_size);
-
-        // multihead attention. iterate over all heads
-        multi_head_attention(pos, p, s, kv_dim, kv_mul, head_size, loff);
-
-        // final matmul to get the output of the attention
-        matmul(s->xb2, s->xb, w->wo + l*dim*dim, dim, dim);
-
-        // residual connection back into x
-        accum(x, s->xb2, dim);
-
-        // ffn rmsnorm
-        rmsnorm(s->xb, x, w->rms_ffn_weight + l*dim, dim);
-
-        // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-        // first calculate self.w1(x) and self.w3(x)
-        matmul(s->hb, s->xb, w->w1 + l*dim*hidden_dim, dim, hidden_dim);
+         RoPe_rotation(pos, s, dim, kv_dim, head_size);
+         multi_head_attention(pos, p, s, kv_dim, kv_mul, head_size, loff);
+         matmul(s->xb2, s->xb, w->wo + l*dim*dim, dim, dim);
+         accum(x, s->xb2, dim);
+         rmsnorm(s->xb, x, w->rms_ffn_weight + l*dim, dim);
+          matmul(s->hb, s->xb, w->w1 + l*dim*hidden_dim, dim, hidden_dim);
         matmul(s->hb2, s->xb, w->w3 + l*dim*hidden_dim, dim, hidden_dim);
-
-        // SwiGLU non-linearity
-        f_silu_elementwise_mul_w3(s, hidden_dim);
-
-        // final matmul to get the output of the ffn
-        matmul(s->xb, s->hb, w->w2 + l*dim*hidden_dim, hidden_dim, dim);
-
-        // residual connection
-        accum(x, s->xb, dim);
+         f_silu_elementwise_mul_w3(s, hidden_dim);
+         matmul(s->xb, s->hb, w->w2 + l*dim*hidden_dim, hidden_dim, dim);
+         accum(x, s->xb, dim);
     }
-
-    // final rmsnorm
-    rmsnorm(x, x, w->rms_final_weight, dim);
-
-    // classifier into logits
-#ifdef USE_CUDA
+     rmsnorm(x, x, w->rms_final_weight, dim);
+ #ifdef USE_CUDA
     matmul(s->logits_gpu, x, w->wcls, p->dim, p->vocab_size);
     CUCHK(cudaMemcpy(s->logits, s->logits_gpu, p->vocab_size * sizeof(float), cudaMemcpyDeviceToHost));
 #else
@@ -763,10 +646,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 #endif 
     return s->logits;
 }
-
-// ----------------------------------------------------------------------------
-// The Byte Pair Encoding (BPE) Tokenizer that translates strings <-> tokens
-
+  
 typedef struct {
     char *str;
     int id;
@@ -786,18 +666,15 @@ int compare_tokens(const void *a, const void *b) {
 }
 
 void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
-    // i should have written the vocab_size into the tokenizer file... sigh
-    t->vocab_size = vocab_size;
-    // malloc space to hold the scores and the strings
-    t->vocab = (char**)malloc(vocab_size * sizeof(char*));
+     t->vocab_size = vocab_size;
+     t->vocab = (char**)malloc(vocab_size * sizeof(char*));
     t->vocab_scores = (float*)malloc(vocab_size * sizeof(float));
     t->sorted_vocab = NULL; // initialized lazily
     for (int i = 0; i < 256; i++) {
         t->byte_pieces[i * 2] = (unsigned char)i;
         t->byte_pieces[i * 2 + 1] = '\0';
     }
-    // read in the file
-    FILE *file = fopen(tokenizer_path, "rb");
+     FILE *file = fopen(tokenizer_path, "rb");
     if (!file) { fprintf(stderr, "couldn't load %s\n", tokenizer_path); exit(EXIT_FAILURE); }
     if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
     int len;
@@ -820,11 +697,8 @@ void free_tokenizer(Tokenizer* t) {
 
 char* decode(Tokenizer* t, int prev_token, int token) {
     char *piece = t->vocab[token];
-    // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
-    if (prev_token == 1 && piece[0] == ' ') { piece++; }
-    // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
-    // parse this and convert and return the actual byte
-    unsigned char byte_val;
+     if (prev_token == 1 && piece[0] == ' ') { piece++; }
+      unsigned char byte_val;
     if (sscanf(piece, "<0x%02hhX>", &byte_val) == 1) {
         piece = (char*)t->byte_pieces + byte_val * 2;
     }
@@ -832,9 +706,7 @@ char* decode(Tokenizer* t, int prev_token, int token) {
 }
 
 void safe_printf(char *piece) {
-    // piece might be a raw byte token, and we only want to print printable chars or whitespace
-    // because some of the other bytes can be various control codes, backspace, etc.
-    if (piece == NULL) { return; }
+      if (piece == NULL) { return; }
     if (piece[0] == '\0') { return; }
     if (piece[1] == '\0') {
         unsigned char byte_val = piece[0];
@@ -846,10 +718,8 @@ void safe_printf(char *piece) {
 }
 
 int str_lookup(char *str, TokenIndex *sorted_vocab, int vocab_size) {
-    // efficiently find the perfect match for str in vocab, return its index or -1 if not found
-#if defined USE_CUDA && defined _WIN32
-    // CUDA on Windows was not capable of handling the syntax below
-    TokenIndex tok;
+ #if defined USE_CUDA && defined _WIN32
+     TokenIndex tok;
     tok.str = str;
 #else
     TokenIndex tok = { .str = str }; // acts as the key to search for
@@ -859,102 +729,56 @@ int str_lookup(char *str, TokenIndex *sorted_vocab, int vocab_size) {
 }
 
 void encode(Tokenizer* t, char *text, int8_t bos, int8_t eos, int *tokens, int *n_tokens) {
-    // encode the string text (input) into an upper-bound preallocated tokens[] array
-    // bos != 0 means prepend the BOS token (=1), eos != 0 means append the EOS token (=2)
-    if (text == NULL) { fprintf(stderr, "cannot encode NULL text\n"); exit(EXIT_FAILURE); }
+      if (text == NULL) { fprintf(stderr, "cannot encode NULL text\n"); exit(EXIT_FAILURE); }
 
     if (t->sorted_vocab == NULL) {
-        // lazily malloc and sort the vocabulary
-        t->sorted_vocab = (TokenIndex *)malloc(t->vocab_size * sizeof(TokenIndex));
+         t->sorted_vocab = (TokenIndex *)malloc(t->vocab_size * sizeof(TokenIndex));
         for (int i = 0; i < t->vocab_size; i++) {
             t->sorted_vocab[i].str = t->vocab[i];
             t->sorted_vocab[i].id = i;
         }
         qsort(t->sorted_vocab, t->vocab_size, sizeof(TokenIndex), compare_tokens);
     }
-
-    // create a temporary buffer that will store merge candidates of always two consecutive tokens
-    // *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
-    char* str_buffer = (char *)malloc((t->max_token_length*2 +1 +2) * sizeof(char));
+      char* str_buffer = (char *)malloc((t->max_token_length*2 +1 +2) * sizeof(char));
     size_t str_len = 0;
-
-    // start at 0 tokens
-    *n_tokens = 0;
-
-    // add optional BOS (=1) token, if desired
-    if (bos) tokens[(*n_tokens)++] = 1;
-
-    // add_dummy_prefix is true by default
-    // so prepend a dummy prefix token to the input string, but only if text != ""
-    // TODO: pretty sure this isn't correct in the general case but I don't have the
-    // energy to read more of the sentencepiece code to figure out what it's doing
-    if (text[0] != '\0') {
+     *n_tokens = 0;
+     if (bos) tokens[(*n_tokens)++] = 1;
+        if (text[0] != '\0') {
         int dummy_prefix = str_lookup((char *)" ", t->sorted_vocab, t->vocab_size);
         tokens[(*n_tokens)++] = dummy_prefix;
     }
 
-    // Okay UTF-8 time. This will get messy. Here is the reference from Wikipedia:
-    // Code point ↔ UTF-8 conversion
-    // First code point	Last code point	Byte 1	Byte 2	Byte 3	Byte 4
-    // U+0000	U+007F	    0xxxxxxx
-    // U+0080	U+07FF	    110xxxxx	10xxxxxx
-    // U+0800	U+FFFF	    1110xxxx	10xxxxxx	10xxxxxx
-    // U+10000	U+10FFFF    11110xxx	10xxxxxx	10xxxxxx	10xxxxxx
 
-    // process the raw (UTF-8) byte sequence of the input string
     for (char *c = text; *c != '\0'; c++) {
-
-        // reset buffer if the current byte is ASCII or a leading byte
-        // 0xC0 is 11000000, so (*c & 0xC0) keeps the first 2 bits and zeros the rest
-        // 0x80 is 10000000
-        // in UTF-8, all continuation bytes start with "10" in first two bits
-        // so in English this is: "if this byte is not a continuation byte"
-        if ((*c & 0xC0) != 0x80) {
-            // this byte must be either a leading byte (11...) or an ASCII char (0x...)
-            // => reset our location, as we're starting a new UTF-8 codepoint
-            str_len = 0;
+             if ((*c & 0xC0) != 0x80) {
+              str_len = 0;
         }
-
-        // append the current byte to the buffer
-        str_buffer[str_len++] = *c; // ++ is post-increment, incremented after this line
+         str_buffer[str_len++] = *c; // ++ is post-increment, incremented after this line
         str_buffer[str_len] = '\0';
-
-        // while the next character is a continuation byte, continue appending
-        // but if there are too many of them, just stop to avoid overruning str_buffer size.
-        if ((*(c+1) & 0xC0) == 0x80 && str_len < 4) {
+          if ((*(c+1) & 0xC0) == 0x80 && str_len < 4) {
             continue;
         }
-
-        // ok c+1 is not a continuation byte, so we've read in a full codepoint
-        int id = str_lookup(str_buffer, t->sorted_vocab, t->vocab_size);
+         int id = str_lookup(str_buffer, t->sorted_vocab, t->vocab_size);
 
         if (id != -1) {
-            // we found this codepoint in vocab, add it as a token
-            tokens[(*n_tokens)++] = id;
+             tokens[(*n_tokens)++] = id;
         } else {
-            // byte_fallback encoding: just encode each byte as a token
-            // +3 is here because the first 3 vocab elements are <unk>, <s>, </s>
-            // so the individual bytes only start at index 3
-            for (int i=0; i < str_len; i++) {
+               for (int i=0; i < str_len; i++) {
                 tokens[(*n_tokens)++] = (unsigned char)str_buffer[i] + 3;
             }
         }
         str_len = 0; // protect against a sequence of stray UTF8 continuation bytes
     }
-
-    // merge the best consecutive pair each iteration, according the scores in vocab_scores
-    while (1) {
+     while (1) {
         float best_score = -1e10;
         int best_id = -1;
         int best_idx = -1;
 
         for (int i=0; i < (*n_tokens-1); i++) {
-            // check if we can merge the pair (tokens[i], tokens[i+1])
-            sprintf(str_buffer, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i+1]]);
+             sprintf(str_buffer, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i+1]]);
             int id = str_lookup(str_buffer, t->sorted_vocab, t->vocab_size);
             if (id != -1 && t->vocab_scores[id] > best_score) {
-                // this merge pair exists in vocab! record its score and position
-                best_score = t->vocab_scores[id];
+                 best_score = t->vocab_scores[id];
                 best_id = id;
                 best_idx = i;
             }
@@ -963,26 +787,17 @@ void encode(Tokenizer* t, char *text, int8_t bos, int8_t eos, int *tokens, int *
         if (best_idx == -1) {
             break; // we couldn't find any more pairs to merge, so we're done
         }
-
-        // merge the consecutive pair (best_idx, best_idx+1) into new token best_id
-        tokens[best_idx] = best_id;
-        // delete token at position best_idx+1, shift the entire sequence back 1
-        for (int i = best_idx+1; i < (*n_tokens-1); i++) {
+         tokens[best_idx] = best_id;
+         for (int i = best_idx+1; i < (*n_tokens-1); i++) {
             tokens[i] = tokens[i+1];
         }
         (*n_tokens)--; // token length decreased
     }
-
-    // add optional EOS (=2) token, if desired
-    if (eos) tokens[(*n_tokens)++] = 2;
+     if (eos) tokens[(*n_tokens)++] = 2;
 
     free(str_buffer);
 }
-
-// ----------------------------------------------------------------------------
-// The Sampler, which takes logits and returns a sampled token
-// sampling can be done in a few ways: greedy argmax, sampling, top-p sampling
-
+   
 typedef struct {
     float prob;
     int index;
@@ -997,8 +812,7 @@ typedef struct {
 } Sampler;
 
 int sample_argmax(float* probabilities, int n) {
-    // return the index that has the highest probability
-    int max_i = 0;
+     int max_i = 0;
     float max_p = probabilities[0];
     for (int i = 1; i < n; i++) {
         if (probabilities[i] > max_p) {
@@ -1010,9 +824,7 @@ int sample_argmax(float* probabilities, int n) {
 }
 
 int sample_mult(float* probabilities, int n, float coin) {
-    // sample index from probabilities (they must sum to 1!)
-    // coin is a random number in [0, 1), usually from random_f32()
-    float cdf = 0.0f;
+      float cdf = 0.0f;
     for (int i = 0; i < n; i++) {
         cdf += probabilities[i];
         if (coin < cdf) {
@@ -1031,16 +843,9 @@ int compare(const void* a, const void* b) {
 }
 
 int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, float coin) {
-    // top-p sampling (or "nucleus sampling") samples from the smallest set of
-    // tokens that exceed probability topp. This way we never sample tokens that
-    // have very low probabilities and are less likely to go "off the rails".
-    // coin is a random number in [0, 1), usually from random_f32()
-
+    
     int n0 = 0;
-    // quicksort indices in descending order of probabilities
-    // values smaller than (1 - topp) / (n - 1) cannot be part of the result
-    // so for efficiency we crop these out as candidates before sorting
-    const float cutoff = (1.0f - topp) / (n - 1);
+       const float cutoff = (1.0f - topp) / (n - 1);
     for (int i = 0; i < n; i++) {
         if (probabilities[i] >= cutoff) {
             probindex[n0].index = i;
@@ -1049,9 +854,7 @@ int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, f
         }
     }
     qsort(probindex, n0, sizeof(ProbIndex), compare);
-
-    // truncate the list where cumulative probability exceeds topp
-    float cumulative_prob = 0.0f;
+     float cumulative_prob = 0.0f;
     int last_idx = n0 - 1; // in case of rounding errors consider all elements
     for (int i = 0; i < n0; i++) {
         cumulative_prob += probindex[i].prob;
@@ -1060,9 +863,7 @@ int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, f
             break; // we've exceeded topp by including last_idx
         }
     }
-
-    // sample from the truncated list
-    float r = coin * cumulative_prob;
+     float r = coin * cumulative_prob;
     float cdf = 0.0f;
     for (int i = 0; i <= last_idx; i++) {
         cdf += probindex[i].prob;
@@ -1078,8 +879,7 @@ void build_sampler(Sampler* sampler, int vocab_size, float temperature, float to
     sampler->temperature = temperature;
     sampler->topp = topp;
     sampler->rng_state = rng_seed;
-    // buffer only used with nucleus sampling; may not need but it's ~small
-    sampler->probindex = (ProbIndex *)malloc(sampler->vocab_size * sizeof(ProbIndex));
+     sampler->probindex = (ProbIndex *)malloc(sampler->vocab_size * sizeof(ProbIndex));
 }
 
 void free_sampler(Sampler* sampler) {
@@ -1087,8 +887,7 @@ void free_sampler(Sampler* sampler) {
 }
 
 unsigned int random_u32(unsigned long long *state) {
-    // xorshift rng: https://en.wikipedia.org/wiki/Xorshift#xorshift.2A
-    *state ^= *state >> 12;
+     *state ^= *state >> 12;
     *state ^= *state << 25;
     *state ^= *state >> 27;
     return (*state * 0x2545F4914F6CDD1Dull) >> 32;
@@ -1098,92 +897,59 @@ float random_f32(unsigned long long *state) { // random float32 in [0,1)
 }
 
 int sample(Sampler* sampler, float* logits) {
-    // sample the token given the logits and some hyperparameters
-    int next;
+     int next;
     if (sampler->temperature == 0.0f) {
-        // greedy argmax sampling: take the token with the highest probability
-        next = sample_argmax(logits, sampler->vocab_size);
+         next = sample_argmax(logits, sampler->vocab_size);
     } else {
-        // apply the temperature to the logits
-        for (int q=0; q<sampler->vocab_size; q++) { logits[q] /= sampler->temperature; }
-        // apply softmax to the logits to get the probabilities for next token
-        softmax(logits, sampler->vocab_size);
-        // flip a (float) coin (this is our source of entropy for sampling)
-        float coin = random_f32(&sampler->rng_state);
-        // we sample from this distribution to get the next token
-        if (sampler->topp <= 0 || sampler->topp >= 1) {
-            // simply sample from the predicted probability distribution
-            next = sample_mult(logits, sampler->vocab_size, coin);
+         for (int q=0; q<sampler->vocab_size; q++) { logits[q] /= sampler->temperature; }
+         softmax(logits, sampler->vocab_size);
+         float coin = random_f32(&sampler->rng_state);
+         if (sampler->topp <= 0 || sampler->topp >= 1) {
+             next = sample_mult(logits, sampler->vocab_size, coin);
         } else {
-            // top-p (nucleus) sampling, clamping the least likely tokens to zero
-            next = sample_topp(logits, sampler->vocab_size, sampler->topp, sampler->probindex, coin);
+             next = sample_topp(logits, sampler->vocab_size, sampler->topp, sampler->probindex, coin);
         }
     }
     return next;
 }
-
-// ----------------------------------------------------------------------------
-// utilities: time
-
+  
 long time_in_ms() {
-    // return time in milliseconds, for benchmarking the model speed
-    struct timespec time;
+     struct timespec time;
     clock_gettime(CLOCK_REALTIME, &time);
     return time.tv_sec * 1000 + time.tv_nsec / 1000000;
 }
-
-// ----------------------------------------------------------------------------
-// generation loop
-
+  
 void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
     char *empty_prompt = (char *)"";
     if (prompt == NULL) { prompt = empty_prompt; }
-
-    // encode the (string) prompt into tokens sequence
-    int num_prompt_tokens = 0;
+     int num_prompt_tokens = 0;
     int* prompt_tokens = (int*)malloc((strlen(prompt)+3) * sizeof(int)); // +3 for '\0', ?BOS, ?EOS
     encode(tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
     if (num_prompt_tokens < 1) {
         fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
         exit(EXIT_FAILURE);
     }
-
-    // start the main loop
-    long start = 0;  // used to time our code, only initialized after first iteration
+     long start = 0;  // used to time our code, only initialized after first iteration
     int next;        // will store the next token in the sequence
     int token = prompt_tokens[0]; // kick off with the first token in the prompt
     int pos = 0;     // position in the sequence
     while (pos < steps) {
-
-        // forward the transformer to get logits for the next token
-        float* logits = forward(transformer, token, pos);
-
-        // advance the state machine
-        if (pos < num_prompt_tokens - 1) {
-            // if we are still processing the input prompt, force the next prompt token
-            next = prompt_tokens[pos + 1];
+         float* logits = forward(transformer, token, pos);
+         if (pos < num_prompt_tokens - 1) {
+             next = prompt_tokens[pos + 1];
         } else {
-            // otherwise sample the next token from the logits
-            next = sample(sampler, logits);
+             next = sample(sampler, logits);
         }
         pos++;
-
-        // data-dependent terminating condition: the BOS (=1) token delimits sequences
-        if (next == 1) { break; }
-
-        // print the token as string, decode it with the Tokenizer object
-        char* piece = decode(tokenizer, token, next);
+         if (next == 1) { break; }
+         char* piece = decode(tokenizer, token, next);
         safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
         fflush(stdout);
         token = next;
-
-        // init the timer here because the first iteration can be slower
-        if (start == 0) { start = time_in_ms(); }
+         if (start == 0) { start = time_in_ms(); }
     }
     printf("\n");
-
-    // report achieved tok/s (pos-1 because the timer starts after first iteration)
-    if (pos > 1) {
+     if (pos > 1) {
         long end = time_in_ms();
         fprintf(stderr, "achieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
     }
@@ -1192,8 +958,7 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
 }
 
 void read_stdin(const char* guide, char* buffer, size_t bufsize) {
-    // read a line from stdin, up to but not including \n
-    printf("%s", guide);
+     printf("%s", guide);
     if (fgets(buffer, bufsize, stdin) != NULL) {
         size_t len = strlen(buffer);
         if (len > 0 && buffer[len - 1] == '\n') {
@@ -1201,88 +966,58 @@ void read_stdin(const char* guide, char* buffer, size_t bufsize) {
         }
     }
 }
-
-// ----------------------------------------------------------------------------
-// chat loop
-// I manually inspected the tokens for a few chat conversations compared to
-// python reference and that seemed ok, but this was not thoroughly tested and
-// is not safely implemented, it's more a proof of concept atm.
-
+     
 void chat(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler,
           char *cli_user_prompt, char *cli_system_prompt, int steps) {
-
-    // buffers for reading the system prompt and user prompt from stdin
-    // you'll notice they are soomewhat haphazardly and unsafely set atm
-    char system_prompt[512];
+      char system_prompt[512];
     char user_prompt[512];
     char rendered_prompt[1152];
     int num_prompt_tokens = 0;
     int* prompt_tokens = (int*)malloc(1152 * sizeof(int));
     int user_idx;
-
-    // start the main loop
-    int8_t user_turn = 1; // user starts
+     int8_t user_turn = 1; // user starts
     int next;        // will store the next token in the sequence
     int token;       // stores the current token to feed into the transformer
     int prev_token;
     int pos = 0;     // position in the sequence
     while (pos < steps) {
-
-        // when it is the user's turn to contribute tokens to the dialog...
-        if (user_turn) {
-            // get the (optional) system prompt at position 0
-            if (pos == 0) {
-                // at position 0, the user can also contribute a system prompt
-                if (cli_system_prompt == NULL) {
-                    // system prompt was not passed in, attempt to get it from stdin
-                    read_stdin("Enter system prompt (optional): ", system_prompt, sizeof(system_prompt));
+         if (user_turn) {
+             if (pos == 0) {
+                 if (cli_system_prompt == NULL) {
+                     read_stdin("Enter system prompt (optional): ", system_prompt, sizeof(system_prompt));
                 } else {
-                    // system prompt was passed in, use it
-                    strcpy(system_prompt, cli_system_prompt);
+                     strcpy(system_prompt, cli_system_prompt);
                 }
             }
-            // get the user prompt
-            if (pos == 0 && cli_user_prompt != NULL) {
-                // user prompt for position 0 was passed in, use it
-                strcpy(user_prompt, cli_user_prompt);
+             if (pos == 0 && cli_user_prompt != NULL) {
+                 strcpy(user_prompt, cli_user_prompt);
             } else {
-                // otherwise get user prompt from stdin
-                read_stdin("User: ", user_prompt, sizeof(user_prompt));
+                 read_stdin("User: ", user_prompt, sizeof(user_prompt));
             }
-            // render user/system prompts into the Llama 2 Chat schema
-            if (pos == 0 && system_prompt[0] != '\0') {
+             if (pos == 0 && system_prompt[0] != '\0') {
                 char system_template[] = "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]";
                 sprintf(rendered_prompt, system_template, system_prompt, user_prompt);
             } else {
                 char user_template[] = "[INST] %s [/INST]";
                 sprintf(rendered_prompt, user_template, user_prompt);
             }
-            // encode the rendered prompt into tokens
-            encode(tokenizer, rendered_prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
+             encode(tokenizer, rendered_prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
             user_idx = 0; // reset the user index
             user_turn = 0;
             printf("Assistant: ");
         }
-
-        // determine the token to pass into the transformer next
-        if (user_idx < num_prompt_tokens) {
-            // if we are still processing the input prompt, force the next prompt token
-            token = prompt_tokens[user_idx++];
+         if (user_idx < num_prompt_tokens) {
+             token = prompt_tokens[user_idx++];
         } else {
-            // otherwise use the next token sampled from previous turn
-            token = next;
+             token = next;
         }
-        // EOS (=2) token ends the Assistant turn
-        if (token == 2) { user_turn = 1; }
-
-        // forward the transformer to get logits for the next token
-        float* logits = forward(transformer, token, pos);
+         if (token == 2) { user_turn = 1; }
+         float* logits = forward(transformer, token, pos);
         next = sample(sampler, logits);
         pos++;
 
         if (user_idx >= num_prompt_tokens && next != 2) {
-            // the Assistant is responding, so print its output
-            char* piece = decode(tokenizer, token, next);
+             char* piece = decode(tokenizer, token, next);
             safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
             fflush(stdout);
         }
@@ -1291,11 +1026,7 @@ void chat(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler,
     printf("\n");
     free(prompt_tokens);
 }
-
-
-// ----------------------------------------------------------------------------
-// CLI, include only if not testing
-#ifndef TESTING
+  #ifndef TESTING
 
 void error_usage() {
     fprintf(stderr, "Usage:   run <checkpoint> [options]\n");
@@ -1313,9 +1044,7 @@ void error_usage() {
 }
 
 int main(int argc, char *argv[]) {
-
-    // default parameters
-    char *checkpoint_path = NULL;  // e.g. out/model.bin
+     char *checkpoint_path = NULL;  // e.g. out/model.bin
     char *tokenizer_path = (char *)"tokenizer.bin";
     float temperature = 1.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
     float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
@@ -1324,16 +1053,12 @@ int main(int argc, char *argv[]) {
     unsigned long long rng_seed = 0; // seed rng with time by default
     char *mode = (char *)"generate";    // generate|chat
     char *system_prompt = (char *)NULL; // the (optional) system prompt to use in chat mode
-
-    // poor man's C argparse so we can override the defaults above from the command line
-    if (argc >= 2) { checkpoint_path = argv[1]; } else { error_usage(); }
+     if (argc >= 2) { checkpoint_path = argv[1]; } else { error_usage(); }
     for (int i = 2; i < argc; i+=2) {
-        // do some basic validation
-        if (i + 1 >= argc) { error_usage(); } // must have arg after flag
+         if (i + 1 >= argc) { error_usage(); } // must have arg after flag
         if (argv[i][0] != '-') { error_usage(); } // must start with dash
         if (strlen(argv[i]) != 2) { error_usage(); } // must be -x (one dash, one letter)
-        // read in the args
-        if (argv[i][1] == 't') { temperature = atof(argv[i + 1]); }
+         if (argv[i][1] == 't') { temperature = atof(argv[i + 1]); }
         else if (argv[i][1] == 'p') { topp = atof(argv[i + 1]); }
         else if (argv[i][1] == 's') { rng_seed = atoi(argv[i + 1]); }
         else if (argv[i][1] == 'n') { steps = atoi(argv[i + 1]); }
@@ -1343,32 +1068,22 @@ int main(int argc, char *argv[]) {
         else if (argv[i][1] == 'y') { system_prompt = argv[i + 1]; }
         else { error_usage(); }
     }
-
-    // parameter validation/overrides
-    if (rng_seed <= 0) rng_seed = (unsigned int)time(NULL);
+     if (rng_seed <= 0) rng_seed = (unsigned int)time(NULL);
     if (temperature < 0.0) temperature = 0.0;
     if (topp < 0.0 || 1.0 < topp) topp = 0.9;
     if (steps < 0) steps = 0;
-
-    // build the Transformer via the model .bin file
-    Transformer transformer;
+     Transformer transformer;
     build_transformer(&transformer, checkpoint_path);
     if (steps == 0 || steps > transformer.config.seq_len) steps = transformer.config.seq_len; // ovrerride to ~max length
-
-    // build the Tokenizer via the tokenizer .bin file
-    Tokenizer tokenizer;
+     Tokenizer tokenizer;
     build_tokenizer(&tokenizer, tokenizer_path, transformer.config.vocab_size);
-
-    // build the Sampler
-    Sampler sampler;
+     Sampler sampler;
     build_sampler(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
 
 #ifdef USE_CUDA
     create_cublas_handle();
 #endif
-
-    // run!
-    if (strcmp(mode, "generate") == 0) {
+     if (strcmp(mode, "generate") == 0) {
         generate(&transformer, &tokenizer, &sampler, prompt, steps);
     } else if (strcmp(mode, "chat") == 0) {
         chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, steps);
@@ -1376,9 +1091,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "unknown mode: %s\n", mode);
         error_usage();
     }
-
-    // memory and file handles cleanup
-    free_sampler(&sampler);
+     free_sampler(&sampler);
     free_tokenizer(&tokenizer);
     free_transformer(&transformer);
 #ifdef USE_CUDA
