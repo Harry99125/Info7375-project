@@ -518,8 +518,8 @@ for (int t0 = 0; t0 <= pos; t0 += blockDim.y) {
 }
 void multi_head_attention(int pos, Config* p, RunState* s, int kv_dim, int kv_mul, int head_size, int loff) {
     size_t elems = head_size              // q
-             + 32 * head_size       // s_k
-             + (pos + 1);             // s_att
+             + 32 * head_size      
+             + (pos + 1);            
 
 size_t shm_bytes = elems * sizeof(float);
     multi_head_attention_kernel <<<p->n_heads, num_threads_lrg, shm_bytes  >>> (pos, p->seq_len, s->q, s->att, s->xb, s->key_cache, s->value_cache, kv_dim, kv_mul, head_size, loff);
