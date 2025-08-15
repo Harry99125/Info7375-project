@@ -248,36 +248,36 @@ __global__ void norm_kernel(float* x, int size,float max_val,float sum) {
     x[i]/=sum;
 }
 __device__ void softmax_gpu(float* x, int size) {
-    extern __shared__ float sm[];      // 复用一小块 shared 当 reduction buffer
-    float* s_max = sm;                 // 1 element
-    float* s_sum = sm + 1;             // 1 element
+    extern __shared__ float sm[];      
+    float* s_max = sm;               
+    float* s_sum = sm + 1;          
 
-    // —— 1) 并行找 max —— 
+   
     float thread_max = -FLT_MAX;
     for (int i = threadIdx.x; i < size; i += blockDim.x) {
         thread_max = fmaxf(thread_max, x[i]);
     }
-    // 写入 shared
+  
     if (threadIdx.x == 0) s_max[0] = thread_max;
     __syncthreads();
-    // 全体读出
+ 
     float max_val = s_max[0];
 
-    // —— 2) 并行计算 exp 和局部 sum —— 
+ 
     float thread_sum = 0.f;
     for (int i = threadIdx.x; i < size; i += blockDim.x) {
         float v = expf(x[i] - max_val);
         x[i] = v;
         thread_sum += v;
     }
-    // 把所有线程的 thread_sum 原子累加到 shared
+   
     if (threadIdx.x == 0) s_sum[0] = 0.0f;
     __syncthreads();
     atomicAdd(&s_sum[0], thread_sum);
     __syncthreads();
     float sum = s_sum[0];
 
-    // —— 3) 并行 normalize —— 
+   
     float inv = 1.0f / sum;
     for (int i = threadIdx.x; i < size; i += blockDim.x) {
         x[i] *= inv;
