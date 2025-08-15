@@ -305,31 +305,58 @@ void softmax(float* x, int size) {
 }
 
 
-__global__ void matmul_kernel(float* xout, const float* x, const float* w, int n, int d) {
-     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= d) return;
-
-    float val = 0.0f;
-    for (int j = 0; j < n; j++) {
-        val += w[i * n + j] * x[j];  
-    }
-    xout[i] = val;
+__global__ void  matmul_kernel(float* y, const float* x, const float* w, int n, int rows){
+    int r = blockIdx.x * blockDim.x + threadIdx.x;
+    if (r >= rows) return;
+    size_t off = (size_t)r * (size_t)n;
+    float acc = 0.f;
+    for (int j = 0; j < n; ++j) acc += w[off + j] * x[j];
+    y[r] = acc;
 }
  void matmul(float* xout, float* x, float* w, int n, int d) {
- 
+     int use = 2;
 
- int ndev = 0;
-    CUCHK(cudaGetDeviceCount(&ndev));
+    // —— 行切分 —— （两张卡）
+    int rows[2]  = { d/2 + (d%2), d - (d/2 + (d%2)) };
+    int row0[2]  = { 0, rows[0] };
 
+    cudaStream_t st[2] = {0,0};
+    float *dX[2]={0,0}, *dW[2]={0,0}, *dY[2]={0,0};
 
-    
-    int block = 32;
-    int grid = (d + block - 1) / block;
-    matmul_kernel<<<grid, block>>>(xout, x, w, n, d);
-    CUCHK(cudaGetLastError());
-    CUCHK(cudaDeviceSynchronize());
- 
-    
+    for (int g=0; g<use; ++g){
+        if (rows[g]==0) continue;
+        CUCHK(cudaSetDevice(g));
+        CUCHK(cudaStreamCreate(&st[g]));
+
+        size_t bx = (size_t)n * sizeof(float);
+        size_t bw = (size_t)rows[g] * (size_t)n * sizeof(float);
+        size_t by = (size_t)rows[g] * sizeof(float);
+
+        CUCHK(cudaMalloc(&dX[g], bx));
+        CUCHK(cudaMalloc(&dW[g], bw));
+        CUCHK(cudaMalloc(&dY[g], by));
+
+        // 广播 x；拷贝本卡的 W 行切片
+        CUCHK(cudaMemcpyAsync(dX[g], x, bx, cudaMemcpyHostToDevice, st[g]));
+        const float* w_src = w + (size_t)row0[g] * (size_t)n;
+        CUCHK(cudaMemcpyAsync(dW[g], w_src, bw, cudaMemcpyHostToDevice, st[g]));
+
+        int block=256, grid=(rows[g]+block-1)/block;
+        matmul_kernel<<<grid, block, 0, st[g]>>>(dY[g], dX[g], dW[g], n, rows[g]);
+
+        CUCHK(cudaMemcpyAsync(xout + row0[g], dY[g], by, cudaMemcpyDeviceToHost, st[g]));
+    }
+
+    // 同步与清理
+    for (int g=0; g<use; ++g){
+        CUCHK(cudaSetDevice(g));
+        if (st[g]) cudaStreamSynchronize(st[g]);
+        if (dX[g]) cudaFree(dX[g]);
+        if (dW[g]) cudaFree(dW[g]);
+        if (dY[g]) cudaFree(dY[g]);
+        if (st[g]) cudaStreamDestroy(st[g]);
+    }
+    cudaSetDevice(0);
  
 }
  
@@ -869,6 +896,16 @@ void error_usage() {
 }
 
 int main(int argc, char *argv[]) {
+      setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
+
+    int ndev=0;
+    cudaGetDeviceCount(&ndev);
+    fprintf(stderr, "[cuda] visible gpus = %d\n", ndev);
+
+
+    fprintf(stderr, "[ok] warmup done\n");
      char *checkpoint_path = NULL;  // e.g. out/model.bin
     char *tokenizer_path = (char *)"tokenizer.bin";
     float temperature = 1.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher

@@ -865,6 +865,7 @@ void error_usage() {
 }
 
 int main(int argc, char *argv[]) {
+    
      char *checkpoint_path = NULL;  // e.g. out/model.bin
     char *tokenizer_path = (char *)"tokenizer.bin";
     float temperature = 1.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
