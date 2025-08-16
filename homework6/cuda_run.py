@@ -10,6 +10,12 @@ tag = f"{cuda_version}-{flavor}-{operating_sys}"
 # Docker image with nvcc and CUDA
 image = (
     modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.11")
+     .apt_install(
+            "build-essential",
+            "openmpi-bin",
+            "libopenmpi-dev",
+           
+        )
         .add_local_dir("code", remote_path="/root/code")
        
 )

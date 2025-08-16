@@ -310,51 +310,57 @@ __global__ void  matmul_kernel(float* y, const float* x, const float* w, int n, 
     if (r >= rows) return;
     size_t off = (size_t)r * (size_t)n;
     float acc = 0.f;
-    for (int j = 0; j < n; ++j) acc += w[off + j] * x[j];
+    for (int i = 0; i < n; i++) {
+        acc += w[off +i] * x[i];
+    }
     y[r] = acc;
 }
  void matmul(float* xout, float* x, float* w, int n, int d) {
      int use = 2;
-
-    // —— 行切分 —— （两张卡）
-    int rows[2]  = { d/2 + (d%2), d - (d/2 + (d%2)) };
-    int row0[2]  = { 0, rows[0] };
+ int rank, size;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+ int half = (d + 1) / 2;   
+int rows[2] = { half, d - half };
+int row0[2] = { 0, half };
 
     cudaStream_t st[2] = {0,0};
     float *dX[2]={0,0}, *dW[2]={0,0}, *dY[2]={0,0};
 
-    for (int g=0; g<use; ++g){
-        if (rows[g]==0) continue;
-        CUCHK(cudaSetDevice(g));
-        CUCHK(cudaStreamCreate(&st[g]));
+    for (int i=0; i<use; i++){
+        if (rows[i]==0) continue;
+        CUCHK(cudaSetDevice(i));
+        CUCHK(cudaStreamCreate(&st[i]));
 
         size_t bx = (size_t)n * sizeof(float);
-        size_t bw = (size_t)rows[g] * (size_t)n * sizeof(float);
-        size_t by = (size_t)rows[g] * sizeof(float);
+        size_t bw = (size_t)rows[i] * (size_t)n * sizeof(float);
+        size_t by = (size_t)rows[i] * sizeof(float);
 
-        CUCHK(cudaMalloc(&dX[g], bx));
-        CUCHK(cudaMalloc(&dW[g], bw));
-        CUCHK(cudaMalloc(&dY[g], by));
+        CUCHK(cudaMalloc(&dX[i], bx));
+        CUCHK(cudaMalloc(&dW[i], bw));
+        CUCHK(cudaMalloc(&dY[i], by));
 
-        // 广播 x；拷贝本卡的 W 行切片
-        CUCHK(cudaMemcpyAsync(dX[g], x, bx, cudaMemcpyHostToDevice, st[g]));
-        const float* w_src = w + (size_t)row0[g] * (size_t)n;
-        CUCHK(cudaMemcpyAsync(dW[g], w_src, bw, cudaMemcpyHostToDevice, st[g]));
+        
+        CUCHK(cudaMemcpyAsync(dX[i], x, bx, cudaMemcpyHostToDevice, st[i]));
+        const float* w_src = w + (size_t)row0[i] * (size_t)n;
+        CUCHK(cudaMemcpyAsync(dW[i], w_src, bw, cudaMemcpyHostToDevice, st[i]));
 
-        int block=256, grid=(rows[g]+block-1)/block;
-        matmul_kernel<<<grid, block, 0, st[g]>>>(dY[g], dX[g], dW[g], n, rows[g]);
+        int block=256, grid=(rows[i]+block-1)/block;
+        matmul_kernel<<<grid, block, 0, st[i]>>>(dY[i], dX[i], dW[i], n, rows[i]);
 
-        CUCHK(cudaMemcpyAsync(xout + row0[g], dY[g], by, cudaMemcpyDeviceToHost, st[g]));
+        CUCHK(cudaMemcpyAsync(xout + row0[i], dY[i], by, cudaMemcpyDeviceToHost, st[i]));
     }
 
-    // 同步与清理
-    for (int g=0; g<use; ++g){
-        CUCHK(cudaSetDevice(g));
-        if (st[g]) cudaStreamSynchronize(st[g]);
-        if (dX[g]) cudaFree(dX[g]);
-        if (dW[g]) cudaFree(dW[g]);
-        if (dY[g]) cudaFree(dY[g]);
-        if (st[g]) cudaStreamDestroy(st[g]);
+    
+    for (int i=0; i<use;i++){
+        CUCHK(cudaSetDevice(i));
+        if (st[i]) cudaStreamSynchronize(st[i]);
+        if (dX[i]) cudaFree(dX[i]);
+        if (dW[i]) cudaFree(dW[i]);
+        if (dY[i]) cudaFree(dY[i]);
+        if (st[i]) cudaStreamDestroy(st[i]);
     }
     cudaSetDevice(0);
  
