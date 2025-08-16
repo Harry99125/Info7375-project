@@ -317,10 +317,7 @@ __global__ void  matmul_kernel(float* y, const float* x, const float* w, int n, 
 }
  void matmul(float* xout, float* x, float* w, int n, int d) {
      int use = 2;
- int rank, size;
-    MPI_Init(&argc, &argv);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
     
  int half = (d + 1) / 2;   
 int rows[2] = { half, d - half };
@@ -330,27 +327,23 @@ int row0[2] = { 0, half };
     float *dX[2]={0,0}, *dW[2]={0,0}, *dY[2]={0,0};
 
     for (int i=0; i<use; i++){
-        if (rows[i]==0) continue;
         CUCHK(cudaSetDevice(i));
         CUCHK(cudaStreamCreate(&st[i]));
-
-        size_t bx = (size_t)n * sizeof(float);
-        size_t bw = (size_t)rows[i] * (size_t)n * sizeof(float);
-        size_t by = (size_t)rows[i] * sizeof(float);
-
-        CUCHK(cudaMalloc(&dX[i], bx));
-        CUCHK(cudaMalloc(&dW[i], bw));
-        CUCHK(cudaMalloc(&dY[i], by));
-
-        
-        CUCHK(cudaMemcpyAsync(dX[i], x, bx, cudaMemcpyHostToDevice, st[i]));
+        size_t a = (size_t)n * sizeof(float);
+        size_t b = (size_t)rows[i] * (size_t)n * sizeof(float);
+        size_t c = (size_t)rows[i] * sizeof(float);
+        CUCHK(cudaMalloc(&dX[i], a));
+        CUCHK(cudaMalloc(&dW[i], b));
+        CUCHK(cudaMalloc(&dY[i], c));
+        CUCHK(cudaMemcpyAsync(dX[i], x, a, cudaMemcpyHostToDevice, st[i]));
         const float* w_src = w + (size_t)row0[i] * (size_t)n;
-        CUCHK(cudaMemcpyAsync(dW[i], w_src, bw, cudaMemcpyHostToDevice, st[i]));
+        CUCHK(cudaMemcpyAsync(dW[i], w_src, b, cudaMemcpyHostToDevice, st[i]));
 
-        int block=256, grid=(rows[i]+block-1)/block;
+        int block=32;
+        int grid=(rows[i]+block-1)/block;
         matmul_kernel<<<grid, block, 0, st[i]>>>(dY[i], dX[i], dW[i], n, rows[i]);
 
-        CUCHK(cudaMemcpyAsync(xout + row0[i], dY[i], by, cudaMemcpyDeviceToHost, st[i]));
+        CUCHK(cudaMemcpyAsync(xout + row0[i], dY[i],c, cudaMemcpyDeviceToHost, st[i]));
     }
 
     
